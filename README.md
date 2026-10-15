@@ -12,12 +12,14 @@ Over four sessions the tutorials analyse one human breast cancer sample with sin
 
 ## Tutorials
 
-| # | Date | Topic |
-|---|------|-------|
-| 1 | 29.04.2026 | [**Single-cell analysis**](01_sbc_290426_tutorial.Rmd): QC, normalization, clustering, marker genes, cell-type scoring with the 10x Xenium breast panel, manual annotation |
-| 2 | 06.05.2026 | [**Visium (1)**](02_sbc_060526_tutorial.Rmd): spatial QC, SCTransform, spatially variable genes (Moran's I), clustering, characterizing tissue regions |
-| 3 | 13.05.2026 | [**Visium (2)**](03_sbc_130526_tutorial.Rmd): spot deconvolution with RCTD, composition clusters and cell-type co-occurrence with ISCHIA |
-| 4 | 20.05.2026 | [**Visium HD**](04_sbc_200526_tutorial.Rmd): 16 µm bins, QC, region subsetting, clustering, and how Visium HD compares with Visium and Xenium |
+| # | Date | Topic | Source | Rendered |
+|---|------|-------|--------|----------|
+| 1 | 29.04.2026 | **Single-cell analysis:** QC, normalization, clustering, marker genes, cell-type scoring with the 10x Xenium breast panel, manual annotation | [Rmd](01_sbc_290426_tutorial.Rmd) | [HTML](https://erkinacar5.github.io/sbc_course_2026/01_sbc_290426_tutorial.html) |
+| 2 | 06.05.2026 | **Visium (1):** spatial QC, SCTransform, spatially variable genes (Moran's I), clustering, characterizing tissue regions | [Rmd](02_sbc_060526_tutorial.Rmd) | [HTML](https://erkinacar5.github.io/sbc_course_2026/02_sbc_060526_tutorial.html) |
+| 3 | 13.05.2026 | **Visium (2):** spot deconvolution with RCTD, composition clusters and cell-type co-occurrence with ISCHIA | [Rmd](03_sbc_130526_tutorial.Rmd) | [HTML](https://erkinacar5.github.io/sbc_course_2026/03_sbc_130526_tutorial.html) |
+| 4 | 20.05.2026 | **Visium HD:** 16 µm bins, QC, region subsetting, clustering, and how Visium HD compares with Visium and Xenium | [Rmd](04_sbc_200526_tutorial.Rmd) | [HTML](https://erkinacar5.github.io/sbc_course_2026/04_sbc_200526_tutorial.html) |
+
+The rendered pages include all plots. Their embedded images were downscaled to keep each page under 20 MB.
 
 ## Setup
 
