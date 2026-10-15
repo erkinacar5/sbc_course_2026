@@ -1,0 +1,489 @@
+---
+title: "Spatial Biology of Cancer - 06.05.2026"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+------------------------------------------------------------------------
+
+## From the last week
+
+Windows users who cannot get Docker installed should delete the this
+folder: `C:\ProgramData\DockerDesktop` then right click on the
+installer, and run it with administrator privileges.
+
+------------------------------------------------------------------------
+
+Mac users should have no problems with setting a limit to the resources
+in Docker desktop. Windows users can change this with the wslconfig
+file. Steps are:
+
+1.  Create a .wslconfig file in the `C:\Users\%USER%` location.
+2.  Add the wsl config here. This could look like this:
+
+```         
+[wsl2]
+memory=8GB
+processors=4
+```
+
+Adjust the values based on the resources your computer has.
+
+3.  Right click on the start menu, start command prompt as administrator
+4.  Run the command `wsl --shutdown` to restart the wsl system. This
+    will automatically restart your docker.
+
+After this, you should see the new values are set as the resource limit
+for your docker.
+
+------------------------------------------------------------------------
+
+On to the tutorial!
+
+------------------------------------------------------------------------
+
+## Visium (1)
+
+The advantage of studying a tissue with Visium is that we can preserve
+the spatial context and organization of its whole (polyadenilated)
+transcriptome (or, for FFPE samples like the one we are about to work
+with, of \~18'500 genes targeted by probes, representative of the
+transcriptome).
+
+Mapping the whole transcriptome with the morphological context helps
+understand better both the normal physiology (e.g., think genes changing
+their spatio-temporal expression during development) and the pathology
+of a tissue.
+
+The main drawback of Visium is that each (barcoded) spot of the (6.5 mm
+x 6.5 mm) capture area has a 55µm diameter, so it does not have
+single-cell resolution as it captures multiple cells. How many cells? It
+depends on the size of the cells and how sparse/close they are in the
+studied tissue.
+
+The positive aspect of having multiple cells per spot is that for each
+spot we can deconvolute the cell types captured (when we have a proper
+single cell reference), and study their co-occurrence (e.g., certain
+immune cells co-localizing with certain cancer cells) as well as make
+predictions of possible interactions between their (expressed) ligands
+and receptors.
+
+Here, we start exploring the Visium dataset matching the single cell one
+we worked with last time. We will observe some spatially variable genes
+and understand the breast cancer tissue slice in its spatial context.
+
+You can observe the H&E high resolution image in the spatial folder
+downloaded along the rest of the Visium data (e.g.,
+`spatial/tissue_hires_image.png`).
+
+```{r sort_objects_by_size, eval=FALSE, include=FALSE}
+# Function to sort your objects by size.
+memory_by_obj <- function(envir = .GlobalEnv, sort_by = "size", decreasing = TRUE) {
+    obj_names <- ls(envir = envir)
+    obj_sizes <- data.frame()
+    for (itm in obj_names) {
+        sz <- as.numeric(object.size(get(itm, envir = envir)))
+        obj_sizes <- rbind(obj_sizes,
+            data.frame(name = itm, size = sz,
+                       size_human = format(structure(sz, class = "object_size"), units = "auto")))
+    }
+    obj_sizes[order(obj_sizes[[sort_by]], decreasing = decreasing), ]
+}
+```
+
+##### Setup
+
+```{r setup, include=T}
+# Some knitr options for creating the HTML file
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(root.dir = ".")
+
+# I set my working directory to the tutorial folder
+setwd("/tutorial")
+
+```
+
+##### Libraries
+
+```{r libraries, message=FALSE}
+library(SeuratDisk)
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(patchwork)
+set.seed(42)
+# Reminder: There can be issues loading back objects saved with SeuratDisk::SaveH5Seurat
+# Saving your objects with the standard 'save' (to a filename.RData) 
+# or 'saveRDS' (to a filename.rds) might be safer.
+```
+
+Load the Visium dataset:
+
+```{r load_input_dataset}
+# NB, specify only the h5 filename, not a path to it. The path goes to 'data.dir'
+# data.dir: Directory containing the H5 file specified by filename and the image data in a subdirectory called 'spatial'
+# Extract the 'spatial' folder from the downloaded 'CytAssist_FFPE_Human_Breast_Cancer_spatial.tar.gz'
+
+vis <- Seurat::Load10X_Spatial(filename = "CytAssist_FFPE_Human_Breast_Cancer_filtered_feature_bc_matrix.h5",
+                              data.dir = ".")
+
+# Tip: It is possible to see how a function works with trace(function, edit=T)
+# e.g. trace(Load10X_Spatial, edit=T) will show you how it matches filename and data.dir
+
+```
+
+Check the class, structure and dimensions of the Seurat object.
+
+```{r check_input}
+# The overall Seurat object:
+vis
+# the expression matrix in input (genes per spot barcodes):
+vis@assays$Spatial$counts[1:4,1:4]
+```
+
+This object contains 1 slice ("slice1"), from 1 capture area of \~5000
+barcoded spots (or less, if the tissue doe not cover the full capture
+area or if some spots have been excluded in the filtered output because
+of very low number of molecules/genes captured).
+
+Each barcode here refers to a different spot of the capture area and not
+to a single cell.
+
+```{r}
+# As of May 2025, there is an issue in Seurat that does not allow coordinates to be
+# correctly read into the Seurat object due to class version change. We do this
+# manually here for now. Alternative could be creating an older version of the class:
+# https://github.com/satijalab/seurat/issues/9012
+coords_raw <- Read10X_Coordinates(filename = "spatial/tissue_positions.csv",
+                                  filter.matrix = T)
+vis <- AddMetaData(vis, coords_raw[, c("row","col")])
+
+# Now we can see the row and column info in the metadata
+# If we want to see the coordinates in the image (from 
+# 'spatial/tissue_lowres_image.png')
+# we need to use GetTissueCoordinates() function
+head(vis@meta.data, 3)
+head(GetTissueCoordinates(vis, image = "slice1"),3)
+
+
+# See where the spot with coordinates (0,0) maps (spot colored in red): 
+SpatialPlot(vis, cells.highlight =  
+              colnames(vis)[vis@meta.data$row == 0 &
+                              vis@meta.data$col == 0 ])
+
+# can you see it in the upper right corner?
+# Because of how spots are disposed, the one right below is not (1,0) but (1,1):
+SpatialPlot(vis, cells.highlight =  
+              colnames(vis)[vis@meta.data$row == 1 &
+                              vis@meta.data$col == 1 ])
+# and the one further below will be (2,0) etc.
+
+```
+
+```{r qc_plots}
+# Visualize basic QC metrics
+plot1 <- VlnPlot(vis, features = "nCount_Spatial", pt.size = 0.1, group.by="orig.ident") + NoLegend() + xlab("")
+plot2 <- SpatialFeaturePlot(vis, features = "nCount_Spatial", max.cutoff = "q99") + theme(legend.position = "right")
+# using the 99th quantile cutoff to avoid having the maximum be set by few outlier spots
+plot3 <- VlnPlot(vis, features = "nFeature_Spatial", pt.size = 0.1, group.by="orig.ident") + NoLegend() + xlab("")
+plot4 <- SpatialFeaturePlot(vis, features = "nFeature_Spatial") + theme(legend.position = "right")
+wrap_plots(plot1, plot2)
+wrap_plots(plot3, plot4) 
+
+# 'nFeature_Spatial' are the number of genes detected expressed in each spot,
+# 'nCount_Spatial' are the number of UMIs (unique molecular identifiers) detected in each spot, i.e. the number of transcripts.
+```
+
+#### Spatially variable features
+
+Proceed with the Seurat normalization first, then rank spatially
+variable (SV) genes.
+
+```{r normalization_and_gene_visualization, include=TRUE, echo=TRUE}
+# Newer version of the future package is limited to 500 MB in its size limit for the functions
+# We up it to 1 GB
+options(future.globals.maxSize = 1024 * 1024^2)
+
+# Use regularized negative binomial regression to normalize UMI count data, see
+# ?SCTransform for details.
+vis <- SCTransform(vis, assay = "Spatial", return.only.var.genes=FALSE, verbose = FALSE)
+
+# Now we can observe transcripts across the tissue
+# e.g. FASN (Fatty Acid Synthase), high in the invasive tumor
+p1 <- SpatialFeaturePlot(vis, features = "FASN") #, pt.size.factor = 1)
+# use 'alpha' to change the opacity of the spots.
+# Provide as a vector specifying the min and max for SpatialFeaturePlot,
+# and see the tissue image below when a spot is outside range.
+# For SpatialDimPlot, provide a single alpha value for each plot.
+p2 <- SpatialFeaturePlot(vis, features = "FASN", alpha = c(0.1, 1))
+p1 + p2
+```
+
+Spatially variable genes are genes whose expression distributions
+display significant dependence on their spatial locations. They might be
+different from the top highly variable genes. E.g. compare
+<https://www.sc-best-practices.org/_images/svg.jpeg>.
+
+Also see:
+<https://satijalab.org/seurat/articles/spatial_vignette.html#identification-of-spatially-variable-features-1>
+
+Rank the top 1000 highly variable genes based on how spatially variable
+their expression is.
+
+Note that:
+
+-   here we decide to test these, and not all expressed genes (for
+    simplicity);
+
+-   one can also specify only specific genes of interest to be ranked;
+
+-   instead of genes, one can also rank cell types by how well they
+    correlate with their spatial location (once cell type probabilities
+    are assigned to spots - we will see this next time).
+
+```{r spatially_variable_genes, warning=FALSE, eval=TRUE}
+
+vis <- FindSpatiallyVariableFeatures(vis, assay = "SCT", features = VariableFeatures(vis)[1:1000],
+                                    selection.method = "moransi") # ~2 min of computation
+```
+
+```{r spatially_variable_genes_plot1, warning=FALSE}
+top.sv.features <- SpatiallyVariableFeatures(vis, method = "moransi")[1:4]
+####! While this is the normal way to do it, I got xtfrm error here in the past!
+# There is a workaround posted on Seurat GitHub so we use that function:
+#https://github.com/satijalab/seurat/issues/7422
+# I am leaving the solution below, in case above doesn't work.
+
+# SpatiallyVariableFeatures_workaround <- function(object, assay="SCT", selection.method = "moransi") {
+#   #' This is work around function to replace SeuratObject::SpatiallyVariableFeatures function.
+#   #' return ranked list of Spatially Variable Features
+# 
+#   # Check if object is a Seurat object
+#   if (!inherits(object, "Seurat")) {
+#     stop("object must be a Seurat object")
+#   }
+# 
+#   # Check if assay is a valid assay
+#   if (!assay %in% names(object@assays)) {
+#     stop("assay must be a valid assay")
+#   }
+# 
+#   # Extract meta.features from the specified object and assay
+#   data <- object@assays[[assay]]@meta.features
+# 
+#   # Select columns starting with the provided col_prefix
+#   moransi_cols <- grep(paste0("^", selection.method), colnames(data), value = TRUE)
+# 
+#   # Filter rows where "moransi.spatially.variable" is TRUE
+#   filtered_data <- data[data[[paste0(selection.method, ".spatially.variable")]], moransi_cols]
+# 
+#   # Sort filtered data by "moransi.spatially.variable.rank" column in ascending order
+#   sorted_data <- filtered_data[order(filtered_data[[paste0(selection.method, ".spatially.variable.rank")]]), ]
+# 
+#   # Return row names of the sorted data frame
+#   rownames(sorted_data)
+# }
+
+```
+
+```{r spatiall_variable_genes_plot1.5, warning=FALSE, fig.width=8, fig.height=6, dpi=300, out.width="100%"}
+# top.sv.features <- SpatiallyVariableFeatures_workaround(vis, selection.method = "moransi")[1:4]
+SpatialFeaturePlot(vis, features = top.sv.features, ncol = 4)
+# Top ones map to an area that is also rich in mitochondrial transcripts (e.g. 'MT-ND1')
+```
+
+```{r spatially_variable_genes_plot2, warning=FALSE, fig.width=8, fig.height=6, dpi=300, out.width="100%"}
+# Plot some from further down in the list, you can see the spatial 'cohesion' slowly reduces.
+SpatialFeaturePlot(vis, features = SpatiallyVariableFeatures(vis, method = "moransi")[100:102], 
+                   alpha = c(0.1, 1))
+```
+
+```{r spatially_variable_genes_plot3, warning=FALSE, fig.width=8, fig.height=6, dpi=300, out.width="100%"}
+# The 1000 genes are ordered from best to least spatially variable, and since we 
+# asked for so many, the bottom ones are actually rather scattered:
+SpatialFeaturePlot(vis, features = SpatiallyVariableFeatures(vis, method = "moransi")[998:1000], 
+                  alpha = c(0.1, 1))
+```
+
+```{r spatially_variable_genes_plot4, warning=FALSE, fig.width=8, fig.height=6, dpi=300, out.width="100%"}
+# In a tissue such this, among the spatially scattered features,
+# we can often expect the genes for immune cells:
+# E.g. check PTPRC (codes for CD45, general immune cell marker) and
+# MS4A1 (codes for CD20 B cells), BANK1 (codes for a scaffold protein in B cells)
+SpatialFeaturePlot(vis, features = c("PTPRC", "MS4A1", "BANK1"))
+```
+
+Now treat spots as single cells and cluster them by their expression
+profile.
+
+```{r clustering}
+
+vis <- RunPCA(vis, assay = "SCT", verbose = FALSE)
+ElbowPlot(vis, ndims = 30)
+# Looks like 11 or 12 is good, how different would it be if I picked those?
+vis <- FindNeighbors(vis, reduction = "pca", dims = 1:30)
+vis <- FindClusters(vis, verbose = FALSE, resolution = 0.2)
+
+# check number of clusters and number of assigned spots to each of those with:
+table(vis$seurat_clusters)
+
+# Define the cluster markers at this resolution
+all.markers.vis.res0.2 <- FindAllMarkers(vis, logfc.threshold = 0.5, only.pos = T)
+# Optionally you can save the markers
+# save(all.markers.vis.res0.2, file = "exercise_results/2/all.markers.vis_res0.2.RData")
+# to load it again
+# load("exercise_results/2/all.markers.vis_res0.2.RData")
+```
+
+Run non-linear dimensional reduction (UMAP)
+
+```{r umap_plot, message=FALSE}
+vis <- RunUMAP(vis, reduction = "pca", dims = 1:30)
+
+# Plot the identified clusters on top of the UMAP representation:
+p1 <- DimPlot(vis, reduction = "umap", group.by = "seurat_clusters", label=T)
+p2 <- SpatialDimPlot(vis, label = TRUE, label.size = 3)
+p1 + p2
+# Some clusters are well defined spatially, some are more scattered
+# Also, bear in mind some will have a prevalence of 1 or few well defined cell types, and some will be more mixed.
+```
+
+Save your processed object.
+
+```{r save_processed_object}
+# Save this Seurat object.
+save(vis, file = "vis_processed.RData")
+
+# to load it again:
+# load("exercise_results/2/vis_processed.RData")
+
+```
+
+Visualize the top 2 marker genes of each cluster found.
+
+```{r cluster_marker_genes, fig.width=8, fig.height=6, dpi=300, out.width="100%", warning=FALSE}
+# DEG (Differentially Expressed Genes)
+
+top2markers_by_cluster <- all.markers.vis.res0.2 %>% group_by(cluster) %>% 
+  dplyr::slice_max(n = 2, order_by = avg_log2FC) %>% ungroup %>% select(gene) %>% unlist
+
+SpatialFeaturePlot(object = vis, alpha = c(0.5, 1), ncol = 4, 
+                   features = top2markers_by_cluster )
+
+```
+
+#### Characterize the tissue
+
+We can use the Xenium breast cancer panel (and its annotation) to help
+us characterize the tissue, its areas and its clusters (some might be
+useful, some not so much). Similarly, also your curated single cell
+annotation should help you do that (with a better resolution if you
+curated well enough some of the cell subtypes).
+
+```{r xenium_breast_cancer_gene_panel, warning=FALSE}
+# If needed, download again 10x Genomics's gene panel for human breast cancer (280 genes) and save it with the other files:
+# 
+ download.file(url="https://cf.10xgenomics.com/supp/xenium/panels/hBreast_v1.csv", 
+               destfile = "10x_human_breast_cancer_gene_panel.csv")
+
+panel <- read.csv("10x_human_breast_cancer_gene_panel.csv", header = F)[,c(1,5)] %>% setNames(., c("gene", "annotation"))
+
+# Are any of the spatially variable genes in common with those in the Xenium panel?
+
+SpatiallyVariableFeatures(vis, method = "moransi")[
+SpatiallyVariableFeatures(vis, method = "moransi") %in% panel$gene]
+# 100+ genes are in common.
+```
+
+Use Seurat's AddModuleScore again to map the possible presence of
+general cell types across the tissue slice (remember that each spot
+contains multiple cells, so it will be less precise than with the single
+cell dataset).
+
+```{r module_score_with_panel, fig.width=8, fig.height=6, dpi=150, out.width="100%", warning=FALSE}
+# Check if any gene in the panel is not present in the dataset:
+panel$gene[!panel$gene %in% rownames(vis)]
+
+# Do we still have other genes in the panel for the same cell types? How many?
+panel %>% filter(annotation == panel$annotation[!panel$gene %in% rownames(vis)]) %>% select(annotation) %>% table
+
+# Subset the panel for the genes in the dataset, and use that to define an approximate score for each cell type:
+panel <- panel %>% filter(gene %in% rownames(vis))
+
+# extract the list of cell types in the annotation column
+panel_cell_types <- panel$annotation %>% unique
+
+
+# Explore the 'AddModuleScore' function from Seurat, and try to apply it for the annotation of 'Adipocytes'
+tmp <- AddModuleScore(vis, features = (panel %>% filter(annotation == "Adipocytes") %>% select(gene) %>% as.list), name = "Adipocytes_score")
+
+# Plot the score. Note: Seurat adds a number (here '1') at the end of the name we've chosen for the score, 
+# to avoid ambiguous duplicates when running multiple modules with the same name
+SpatialPlot(tmp, features = "Adipocytes_score1")
+
+# Repeat the same for the all the annotated cell types in the panel, in an automated way.
+# As AddModuleScore accepts a list of vectors to score multiple expression programs at once, where 'each entry should be a vector of feature names' (i.e. of gene names),
+# reshape the panel dataframe as a named list of vectors, one vector for each cell type annotation:
+annotation_list <- panel %>% select(gene, annotation) %>% group_by(annotation) %>% # this groups each gene to the cell type annotation
+                            group_map(~.$gene) %>% # this creates the list of vectors, where each vector is the set of genes for a cell type
+                            setNames(., panel %>% group_by(annotation) %>% group_keys() %>% pull(1)) # this names each vector in the list with the matching cell type label
+
+# The warning about group_keys() can be ignored, check the output:
+str(annotation_list)
+
+# substitute the spaces with underscores in the cell type labels
+names(annotation_list) <- names(annotation_list) %>% stringr::str_replace_all(pattern = " ", replacement = "_")
+
+tmp <- AddModuleScore(vis, 
+                      features = annotation_list, 
+                        name = paste0(names(annotation_list) , "_score")) # add 'score_' at the beginning of the name of the score
+
+
+# Observe how the score for each cell has been added to the metadata of the Seurat object
+str(tmp@meta.data)
+
+# for aesthetics, we can remove the trailing number Seurat adds to the score label:
+names(tmp@meta.data) <- names(tmp@meta.data) %>% stringr::str_replace(pattern = "_score.*", "_score")
+
+# Plot the scores obtained:
+features <- names(tmp@meta.data) %>% grep("_score", ., value = TRUE)
+for (f in features) {
+  print(SpatialPlot(tmp, features = f))
+}
+
+#rm(tmp) # remove before re-running, or the scores will be saved multiple times
+```
+
+The scores for each cell depend on the composition of the dataset, which
+might not be intuitive at first, and it's important to remember when you
+use it to make assumptions about your data.
+
+You can repeat the same creating your own panel of top marker genes for
+the other cell types/states you defined in your annotation, and use them
+in the same way to help you characterize the tissue (for cell types with
+just 2-3 specific markers, you can also just plot them individually).
+
+#### Drawing from the various approaches that we saw and from your curated single-cell annotation, try to contextualize spatially (choose markers/scores to plot and comment if and how well they are spatially located) where are the cell types of the following:
+
+(You can also check the high-resolution H&E image, e.g.
+`spatial/tissue_hires_image.png`)
+
+1 - the stroma
+
+2 - the invasive tumor
+
+3 - the luminal epithelium
+
+4 - the myoepithelial layer(s)
+
+5 - three immune cell types
+
+6 - any other feature/cell type you characterized and think it could be
+interesting to check spatially.

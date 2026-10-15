@@ -1,0 +1,4 @@
+# Rendered notebooks are generated output: keep them out of the language stats
+*.html linguist-generated=true
+# Count the R Markdown sources as R
+*.Rmd linguist-language=R

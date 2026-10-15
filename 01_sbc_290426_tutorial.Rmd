@@ -1,0 +1,373 @@
+---
+title: "Spatial Biology of Cancer - 29.04.2026"
+subtitle: "Tutorial 1"
+output:
+  html_document:
+    df_print: paged
+    self_contained: true
+---
+
+The aim of this first data analysis is to explore a cancer single cell dataset paired with the spatial data we will see in the next tutorials and try to annotate its cell sub-populations. Having a good annotation at the single cell level helps studying spatial data in multiple ways, in particular to deconvolute the cell types (and their proportions) when the spatial assay does not have single cell resolution 
+
+<div style="text-align: center; margin: 20px;">
+  <img src="https://cdn.10xgenomics.com/image/upload/v1645041033/analysis-guides/Spatial-AnnotatedSCdata-Illus.png" width="500">
+  <p style="font-size: 0.9em; color: #555;">
+    Figure: Example of spatial annotation and deconvolution concept.
+  </p>
+</div>
+
+or when the spatial assay has great resolution but cannot capture the whole transcriptome, and we need to define a panel of genes that is meaningful to our experimental design (such as the probes used by image-based spatial approaches).
+
+Along the way, you can try the function below if you have too many objects in your workspace and start wondering which are taking up a lot of your system's memory (you see the total currently used memory on the right, under the 'Environment' tab, showed as a pie/donut chart when 'Memory Usage Report...' is selected). If you want to delete some you don't need anymore, this will help you prioritize them by size.
+
+```{r sort_objects_by_size}
+memory_by_obj <- function(envir = .GlobalEnv, sort_by = "size", decreasing = TRUE) {
+    obj_names <- ls(envir = envir)
+    obj_sizes <- data.frame()
+    for (itm in obj_names) {
+        sz <- as.numeric(object.size(get(itm, envir = envir)))
+        obj_sizes <- rbind(obj_sizes,
+            data.frame(name = itm, size = sz,
+                       size_human = format(structure(sz, class = "object_size"), units = "auto")))
+    }
+    obj_sizes[order(obj_sizes[[sort_by]], decreasing = decreasing), ]
+}
+```
+
+
+##### Setup
+```{r setup, include=T}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Set your working directory for all code chunks and for knitr.
+setwd("/tutorial")
+knitr::opts_chunk$set(root.dir = "/tutorial")
+```
+
+
+##### Libraries
+```{r libraries, echo=TRUE, message=FALSE, warning=FALSE}
+# These should be installed within the container
+library(Seurat)
+library(SeuratDisk)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+set.seed(42)
+```
+
+Load the single cell dataset:
+
+```{r load_input_dataset, include=T}
+sc.data <- Seurat::Read10X_h5(filename = "Chromium_FFPE_Human_Breast_Cancer_Chromium_FFPE_Human_Breast_Cancer_count_sample_filtered_feature_bc_matrix.h5",
+                      use.names = TRUE, unique.features = TRUE)
+
+# We read the raw data in here. It is a big matrix!
+
+```
+
+Check the class, structure and dimensions of the dataset (expression x cell barcode (bc) matrix):
+
+```{r check_input}
+sc.data %>% class
+sc.data[1:3,1:3]
+dim(sc.data)
+#or all in one:
+sc.data %>% str
+```
+
+Initialize the Seurat object with the raw (non-normalized) data:
+
+```{r CreateSeuratObject}
+sc <- CreateSeuratObject(counts = sc.data, project = "scFFPE", min.cells = 3)
+```
+
+We will then follow through the standard pre-processing workflow proposed by the Seurat package: https://satijalab.org/seurat/articles/pbmc3k_tutorial.html
+
+```{r qc_plots}
+# Compute percent of counts coming from mitochondrial genes:
+sc[["percent.mt"]] <- PercentageFeatureSet(sc, pattern = "^MT-")
+# Visualize QC metrics as a violin plot
+VlnPlot(sc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+# NB: 'nFeature_RNA' are the number of genes detected in each cell from the RNA expression,
+# 'nCount_RNA' are the number of UMIs (unique molecular identifiers) detected in each cell, i.e. the number of transcripts.
+# Use FeatureScatter to visualize relationships between these 3 features:
+plot1 <- FeatureScatter(sc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(sc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+# E.g., we see some cells with high mitochondrial percentage also have low counts, and are likely low quality cells
+
+# Check which genes contribute the most to such reads. We can for instance plot the percentage of counts per gene:
+# This is an extra QC bit that Seurat doesn't provide but is still interesting to check.
+
+C <- sc@assays$RNA$counts
+C <- Matrix::t(Matrix::t(C)/Matrix::colSums(C)) * 100
+most_expressed <- order(Matrix::rowSums(C), decreasing = T)[20:1]
+boxplot(t(as.matrix(C[most_expressed, ])), cex = 0.1, las = 1, xlab = "% total count per cell",
+        col = (scales::hue_pal())(20)[20:1], horizontal = TRUE)
+```
+
+Subset the dataset: keep cells with mitochondrial fraction ≤ 0.15 and number of genes observed ≥ 500
+
+```{r subset_seurat_object}
+# To keep the initial Seurat object ('sc'), I save the subset to a new filtered object, 'scf':
+scf <- subset(sc, subset = nFeature_RNA >= 500 & percent.mt < 15) # & nFeature_RNA < 5000 # down to 24175 cells, median of 1315 genes
+```
+
+Check again the features for the subsetted cells:
+
+```{r post_filtering_qc}
+plot3 <- FeatureScatter(scf, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot4 <- FeatureScatter(scf, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot3 + plot4
+
+#To compare the with the previous ones:
+(plot1 + plot2) / (plot3 + plot4)
+```
+Clean up some variables to open up some space in the memory:
+
+```{r clean_up}
+remove(C)
+remove(sc)
+remove(sc.data)
+```
+
+Proceed with the standard Seurat normalization and dimensional reduction:
+
+```{r normalization_and_clustering}
+# Apply a global-scaling normalization method that normalizes the feature expression measurements 
+# for each cell by the total expression, multiplies this 
+# by a scale factor (10,000 by default), and log-transforms the result
+scf <- NormalizeData(scf, normalization.method = "LogNormalize", scale.factor = 10000)
+
+# VST (variance stabilizing transformation) looks at the trend between variance and mean in the data, and then tries to find a strictly monotonous transformation of the data so that this trend is removed.
+# In practice, the transformation will approach the logarithm function for high values and the square root function for small values (incl. 0), and smoothly interpolate in-between.
+scf <- FindVariableFeatures(scf, selection.method = "vst", nfeatures = 2000)
+
+# Next, we apply a linear transformation (‘scaling’) that is 
+# a standard pre-processing step prior to dimensional reduction techniques like PCA.
+all.genes <- rownames(scf)
+scf <- ScaleData(scf, features = all.genes)
+
+# Next we perform Principal Component Analysis on the scaled data.
+# By default, only the previously determined variable features are used as input, 
+# but can be defined using features argument if you wish to choose a different subset.
+scf <- RunPCA(scf, features = VariableFeatures(scf))
+# Get an idea of how much percentage of variance is explained by each 
+# of the first 50 principal components by an elbow plot:
+ElbowPlot(scf, ndims = 50)
+# Let's use all 50 PCs for the downstream analyses:
+
+# Compute the shared nearest neighbor (SNN) graph on the dimensionally reduced (PCA) data
+# For more details, see: https://satijalab.org/seurat/articles/pbmc3k_tutorial.html#cluster-the-cells
+scf <- FindNeighbors(scf, dims = 1:50)
+
+# Group cells into clusters; try different resolutions to end up with 17 clusters
+scf <- FindClusters(scf, resolution = 0.25)
+# check number of clusters and number of assigned cells to each of those with:
+table(scf$seurat_clusters) # same as: table(scf$RRNA_snn_res.0.25)
+
+# To subcluster only a specific cluster, you can subset its cells and reprocess them from scratch, 
+# or you can try use:
+# https://satijalab.org/seurat/reference/findsubcluster
+
+#Run non-linear dimensional reduction (UMAP or tSNE)
+#scf <- RunTSNE(scf, seed.use=42)
+scf <- RunUMAP(scf, dims=1:50, verbose = T, seed.use = 42)
+```
+
+```{r umap_plot}
+# Plot the identified clusters on top of the UMAP representation:
+DimPlot(scf, reduction = "umap", group.by = "seurat_clusters", label=T)
+#DimPlot(scf, reduction = "tsne")
+```
+
+```{r save_processed_object}
+# save this Seurat object:
+save(scf, file = "seurat_scf.RData")
+#or SeuratDisk::SaveH5Seurat(scf, "scf.h5Seurat")
+# Be careful with h5 files, on a network location you might have locking issues
+
+# to load it again:
+# load("seurat_scf.RData")
+
+```
+
+Check the top N most highly variable genes:
+
+```{r top_variable_features}
+# Identify the 5 most highly variable genes
+topN <- head(VariableFeatures(scf), 5)
+
+# plot the variable features with and without labels
+plot1 <- VariableFeaturePlot(scf)
+plot2 <- LabelPoints(plot = plot1, points = topN, repel = TRUE, xnudge = 0, ynudge =0)
+plot1 / plot2
+```
+
+What type of cells can you already expect to find, based on these few genes?
+
+Explore gene expression across tissues, eg at: https://cellxgene.cziscience.com/gene-expression
+
+Three good atlases as reference are also:
+
+- A single-cell atlas of the healthy breast tissues reveals clinically relevant clusters of breast epithelial cells: https://doi.org/10.1016/j.xcrm.2021.100219 (explorable at https://cellxgene.cziscience.com/e/de985818-285f-4f59-9dbd-d74968fddba3.cxg/)
+
+- A single-cell RNA expression atlas of normal, preneoplastic and tumorigenic states in the human breast: https://doi.org/10.15252/embj.2020107333
+
+- A single–cell type transcriptomics map of human tissues: https://doi.org/10.1126/sciadv.abh2169
+
+
+#### Explore the marker genes of each cluster:
+
+```{r cluster_marker_genes}
+# DEG (Differentially Expressed Genes)
+
+# Find markers for every cluster compared to all remaining cells, report only the positive ones:
+
+# You can also use test.use = "MAST", a model-based DEG test designed for single-cell data.
+# MAST accounts for zero-inflation/dropout and can include covariates, but it may be slower
+# and is not automatically "better" for every dataset.
+
+all.markers <- FindAllMarkers(scf, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25, verbose=F)
+# mast.all.markers <- FindAllMarkers(scf, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25, test.use = "MAST", verbose=F)
+
+# optionally, save the markers
+save(all.markers, file="all.markers.sc.RData")
+# save(mast.all.markers, file="mast.all.markers.sc.RData")
+
+all.markers %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::slice_max(n = 2, order_by = avg_log2FC)
+  
+
+# Plot gene expression across clusters
+VlnPlot(scf, features = c("IL7R", "CD2"))
+FeaturePlot(scf, features = c("IL7R", "CD2"), order=T)
+
+```
+
+##### Use a pre-defined panel of marker genes for breast cancer to help you define the cell types (very broad classification).
+
+```{r xenium_breast_cancer_gene_panel, fig.width=16, fig.height=12, dpi=300, out.width="100%"}
+
+# Download 10x Genomics' gene panel for human breast cancer (280 genes):
+
+download.file(url="https://cf.10xgenomics.com/supp/xenium/panels/hBreast_v1.csv", destfile = "10x_human_breast_cancer_gene_panel.csv")
+
+# read it in R (only columns 1 and 5 needed) and name the columns
+panel <- read.csv("10x_human_breast_cancer_gene_panel.csv", header = F)[,c(1,5)] %>% setNames(., c("gene", "annotation"))
+
+# Get a view of it
+str(panel)
+# or
+# View(panel)
+
+# Check if any gene in the panel is not present in the dataset:
+panel$gene[!panel$gene %in% rownames(scf)]
+
+# Do we still have other genes in the panel for the same cell types? How many?
+panel %>% filter(annotation == panel$annotation[!panel$gene %in% rownames(scf)]) %>% select(annotation) %>% table
+
+# Then let's subset the panel for the genes in the dataset, and use that to define an approximate score for each cell type:
+panel <- panel %>% filter(gene %in% rownames(scf))
+
+# extract the list of cell types in the annotation column
+panel_cell_types <- panel$annotation %>% unique
+
+# Explore the 'AddModuleScore' function from Seurat, and try to apply it for the annotation of 'Adipocytes'
+# Note, I return the annotated scf object to a 'tmp' object for the moment being.
+tmp <- AddModuleScore(scf, features = (panel %>% filter(annotation == "Adipocytes") %>% select(gene) %>% unlist), name = "Adipocytes_score")
+
+# Plot the score. Note: Seurat adds a number (here '1') at the end of the name we've chosen for the score, 
+# to avoid ambiguous duplicates when running multiple modules with the same name
+FeaturePlot(tmp, features = "Adipocytes_score1", order=T)
+
+# Repeat the same for the all the annotated cell types in the panel, in an automated way.
+# As AddModuleScore accepts a list of vectors to score multiple expression programs at once, where 'each entry should be a vector of feature names' (i.e. of gene names),
+# reshape the panel dataframe as a named list of vectors, one vector for each cell type annotation:
+annotation_list <- panel %>% select(gene, annotation) %>% group_by(annotation) %>%  # this groups each gene to the cell type annotation
+                            group_map(~.$gene) %>% # this creates the list of vectors, where each vector is the set of genes for a cell type
+                            setNames(., panel %>% group_by(annotation) %>% group_keys() %>% pull(1)) # this names each vector in the list with the matching cell type label
+
+# The warning about group_keys() can be ignored, check the output:
+str(annotation_list)
+
+# substitute the spaces with underscores in the cell type labels
+names(annotation_list) <- names(annotation_list) %>% stringr::str_replace_all(pattern = " ", replacement = "_")
+
+# To be on the safe side, make a temporary copy of the Seurat object and operate on that:
+tmp = scf
+
+tmp <- AddModuleScore(tmp, 
+                      features = annotation_list, 
+                        name = paste0(names(annotation_list) , "_score")) # add 'score_' at the end of the name of the score
+
+
+# Observe how the score for each cell has been added to the metadata of the Seurat object
+str(tmp@meta.data)
+
+# for aesthetics, we can remove the trailing number Seurat adds to the score label:
+names(tmp@meta.data) <- names(tmp@meta.data) %>% stringr::str_replace(pattern = "_score.*", "_score")
+
+# Plot all scores obtained:
+FeaturePlot(tmp, features = names(tmp@meta.data) %>% grep(., pattern= "_score", value=T), # select names of the scores from the metadata and pass them as features
+                  order=T) # plot cells with highest values on top
+
+# To make the plotting quicker at lower resolution, use the function 'raster=T'
+FeaturePlot(tmp, features = names(tmp@meta.data) %>% grep(., pattern= "_score", value=T),
+                 order=T, raster= T, ncol=4)
+
+# We can also plot them along with the initial clustering:
+# Note, make sure you have the 'patchwork' library loaded to use '+' to put plots together:
+FeaturePlot(tmp, features = names(tmp@meta.data) %>% grep(., pattern= "_score", value=T), order=T, raster= T) +
+  DimPlot(scf, group.by = "seurat_clusters", label=T)
+
+```
+
+The scores for each cell depend on the composition of the dataset, which might not be intuitive at first, and it's important to remember when you use it to make assumptions about your data.
+
+Once you are satisfied with the characterization of the clusters found, you can annotate them as follows (change the letters in the quotes below, add clusters if you resolved to define more):
+
+```{r curated_cell_annotation, fig.width=8, fig.height=6, dpi=300, out.width="100%"}
+
+tmp <- scf@meta.data %>% select(orig.ident, RNA_snn_res.0.25) %>% 
+  dplyr::mutate( celltype = case_match(RNA_snn_res.0.25,
+                                              "0" ~ "a",
+                                              "1" ~ "b",                                                                                       
+                                              "2" ~ "c",                                                                                                
+                                              "3" ~ "d",                                                                                
+                                              "4" ~ "e",                                                                                   
+                                              "5" ~ "f",                                                                                    
+                                              "6" ~ "g",                                                                                                   
+                                              "7" ~ "h",                                                                                         
+                                              "8" ~ "i",                                                                                                  
+                                              "9" ~ "j",                                                                               
+                                              "10" ~ "k",                                                                                  
+                                              "11" ~ "l",                                                                                         
+                                              "12" ~ "m",                                                                                           
+                                              "13" ~ "n",                                                                                            
+                                              "14" ~ "o",                                                                                         
+                                              "15" ~ "p",                                                                                                 
+                                              "16" ~ "q"
+                                              )
+                 ) %>% select(celltype) %>% unlist
+
+names(tmp) <- colnames(scf)
+
+# DimPlot(scf, group.by = "celltype_annotation", label=T, repel=T)
+
+# to edit some cell annotation afterwards, rename the label of specific cells such as:
+tmp[names(tmp) %in% colnames(scf)[scf$RNA_snn_res.0.25 == 0] ] <- "corrected_celltype_label"
+
+scf <- AddMetaData(scf,
+                  metadata = tmp,
+                  col.name = 'celltype_annotation'
+)
+
+rm(tmp)
+# Visualize the clusters with the imported labels:
+DimPlot(scf, group.by = "celltype_annotation", label=T, repel=T)
+
+```

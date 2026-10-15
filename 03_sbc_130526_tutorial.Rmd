@@ -1,0 +1,313 @@
+---
+title: "Spatial Biology of Cancer - 13.05.2026"
+output: html_document
+---
+
+General reminder: I provide you with the code and comments in an R markdown because it's tidier than commenting everything in an R script, but you can copy the code you need into an R script (starting with libraries and needed preprocessed data, e.g. see chunk 6) and execute it in the console, and have the plots and code separately. This should avoid having issues linked to the heavy cached results from the chunks of the R notebook.
+
+##### Data
+
+Extra files you should have for today:
+
+- `singlecell_author_annotation.csv`
+
+- `RCDT_full.RData`
+
+- you should already have from previously: `vis_processed.RData`, or _even better_ the corresponding one containing your extra annotations.
+
+The prepared files for today were shared with course participants. `RCTD_full.RData` can be regenerated with the RCTD chunks below (this can take hours on a laptop).
+
+Read through the steps to make sure you understand how we got to the deconvolution results - you can then start working from directly afterwards (chunk 6 in the Rmd file), where we load the processed objects from the '.RData' files.
+
+
+### Visium (2) - Deconvolution into cell types and cell type co-occurrence
+
+As we said last time, the main drawback of Visium is that each (barcoded) spot of the (6.5 mm x 6.5 mm) capture area has a 55µm diameter, so it does not have single-cell resolution as it captures multiple cells.
+
+Today we will look at how to decompose each spot into the types and proportion of cells it (likely) contains. We call this process decomposition or *deconvolution*. To do so, we leverage the single cell reference coming from the same sample (https://cdn.10xgenomics.com/image/upload/v1645041033/analysis-guides/Spatial-AnnotatedSCdata-Illus.png).
+
+For this task, I provide you the single cell final subset used by the original author of the data, with their manually curated annotation (you can see their publication http://dx.doi.org/10.1038/s41467-023-43458-x, bear in mind their analyses and plots are different).
+
+The deconvolution tool we use is called RCTD (Robust Cell Type Decomposition, published in https://www.nature.com/articles/s41587-021-00830-w), it ranked among the best performing deconvolution tools in various benchmarks, and is also embraced by 10x Genomics (see https://www.10xgenomics.com/resources/analysis-guides/integrating-10x-visium-and-chromium-data-with-r ).
+Seurat also included it in its vignettes (e.g. see https://satijalab.org/seurat/articles/spatial_vignette.html#spatial-deconvolution-using-rctd ).
+
+Once obtained cell types proportions (or weights) for each spot, we can study the co-occurrence of pairs of cell types (e.g., cell type A often or seldom co-localizes with cell type B), as well as make predictions of possible interactions between their (expressed) ligands and receptors. Today we will focus on cell type co-occurrence with the help of a handy tool designed by a former postdoc in our lab.
+
+The tool is called `ISCHIA`.
+
+For this script we deactivate renv due to an error. Renv is installed by default in our container, but we actually don't need it since we are working in a reproducible container.
+
+```{r deactivate_renv}
+renv::deactivate()
+```
+
+```{r load_libraries, warning=FALSE}
+library(Seurat)
+library(SeuratDisk)
+library(tidyr)
+library(ggplot2)
+library(patchwork)
+library(spacexr) # you will only need this if you run the deconvolution yourself
+library(ISCHIA)
+```
+
+
+Download the file `singlecell_author_annotation.csv` and save it in your 'tutorial' folder. This is the paper manually-curated annotation of the single cell dataset. Import it in R.
+```{r sc_annotation}
+sc_annot <- read.csv("singlecell_author_annotation.csv") %>% dplyr::select(Barcode, Annotation)
+
+# check its format
+str(sc_annot)
+
+# import the single cell data and subset the expression matrix for the cells kept in the paper
+# Note, we only need the counts for the deconvolution with RCTD, so we don't run the typical processing steps.
+sc.data <- Read10X_h5(filename = "Chromium_FFPE_Human_Breast_Cancer_Chromium_FFPE_Human_Breast_Cancer_count_sample_filtered_feature_bc_matrix.h5",
+                      use.names = TRUE, unique.features = TRUE)
+
+cells_subset <- intersect(colnames(sc.data), sc_annot$Barcode)
+
+# create the Seurat object to easily retrieve the nUMIs for each cell barcode
+sc <- CreateSeuratObject(counts = sc.data[,cells_subset], project = "scFFPE", min.cells = 3)
+
+# Subset also the annotation, as 12 cell barcodes from the single cell data are somehow missing :
+sc_annot <- sc_annot %>% dplyr::filter(Barcode %in% cells_subset) %>%
+  # and order in the same order as in the sc object
+  dplyr::arrange(factor(Barcode, levels = colnames(sc)))
+
+```
+
+Prepare the single cell (reference) and the Visium (query) datasets for RCTD.
+
+```{r rctd_prep, eval=F}
+# Extract the information to pass to the RCTD Reference function
+# Convert the annotation of the cell types to a named vector,
+# with the annotated cell types as factors, each named with its cell barcode
+counts <- sc@assays$RNA$counts
+celltype <- as.factor(sc_annot$Annotation)
+names(celltype) <- sc_annot$Barcode
+
+# to check the order of the barcodes is indeed the same in annotation and sc data:
+table(colnames(sc) == names(celltype))
+
+# extract the UMIs per cell as a named vector as well:
+nUMI <- sc$nCount_RNA
+names(nUMI) <- colnames(sc)
+
+# setup the (single cell) reference object for RCTD
+reference <- spacexr::Reference(counts, celltype, nUMI)
+
+# set up the Visium query with the RCTD function SpatialRNA
+vis <- Seurat::Load10X_Spatial(filename = "CytAssist_FFPE_Human_Breast_Cancer_filtered_feature_bc_matrix.h5", 
+                              data.dir = ".")
+
+vis_counts <- vis@assays$Spatial$counts
+coords <- GetTissueCoordinates(vis)
+colnames(coords) <- c("x", "y")
+coords[is.na(colnames(coords))] <- NULL
+
+query <- SpatialRNA(coords, vis_counts, colSums(vis_counts))
+```
+
+Once ready, we can use the single-cell reference to deconvolute each spot of the query (Visium) into cell proportions or probabilities.
+
+```{r rctd, eval=F}
+# RCTD parallelizes well, so multiple cores can be specified for faster performance,
+# if your computer allows for it.
+
+# combine query and reference into a RCTD object
+RCTD <- spacexr::create.RCTD(query, reference, max_cores = 6)
+
+# Run the deconvolution. It can take hours on a local pc, so I will provide you with the output instead.
+RCTD_full <- run.RCTD(RCTD, doublet_mode = "full")
+# doublet_mode = "full" indicates we are not restraining the number of cell types that can be found in a spot.
+# Allowing for more than few cell types per spot makes sense because of the low resolution allowed by Visium
+# (i.e., it's reasonable to expect even ~10 cells or more per spot, depending also on the tissue.
+# See https://kb.10xgenomics.com/hc/en-us/articles/360035487952-How-many-cells-are-captured-in-a-single-spot- ).
+save(RCTD_full, file="RCTD_full.RData")
+```
+
+Import the already computed RCTD results, and use them to annotate the Visium Seurat object.
+
+```{r load_preprocessed_objects}
+# Import your processed/previously annotated Visium:
+load("vis_processed.RData") # object: 'vis'
+
+# Import the deconvolution results
+load("RCTD_full.RData")
+```
+
+```{r annotate_seurat, message=F}
+# extract the results: weights for each cell type in each spot
+# and normalize them so that their sum equals to 1 in each spot:
+predictions <- spacexr::normalize_weights(RCTD_full@results$weights) %>% as.data.frame
+
+# few spots have been dropped because they didn't pass the default filters prior to the deconvolution, 
+SpatialPlot(vis, cells.highlight = colnames(vis)[!colnames(vis) %in% rownames(predictions)])
+
+# so we subset the visium Seurat object accordingly:
+dec_vis <- subset(vis, cells = colnames(vis)[colnames(vis) %in% rownames(predictions)])
+# Note that here above 'cells' actually just means barcodes of the spots, simply the syntax of the command doesn't change for spatial datasets
+
+# Seurat's metadata columns follow the 'make.names' rules so the '+' and spaces and '&' need to be replaced:
+# Fix celltype names to be compliant
+colnames(predictions) <- colnames(predictions) %>% 
+  stringr::str_replace_all(pattern = "\\+", replacement = "pos") %>%
+  stringr::str_replace_all(pattern = "\\&", replacement = "and") %>%
+  stringr::str_replace_all(pattern = " ", replacement = "_") %>%
+  stringr::str_replace_all(pattern = "-", replacement = "_")
+
+# check the order of the barcodes is the same
+table(colnames(dec_vis)== rownames(predictions))
+
+dec_vis <- AddMetaData(dec_vis, metadata = predictions)
+
+celltypes_names <- colnames(predictions)
+
+# check how the predictions are added to the object metadata:
+str(dec_vis@meta.data)
+
+# plot the normalized 'weights', or proportions, of the predicted cell types across the Visium
+# due to very crowded plot area, I save the plot in a pdf file
+pdf(file = "visium_predicted_proportions.pdf")
+SpatialPlot(dec_vis, features = celltypes_names, combine = F)
+dev.off()
+```
+
+```{r cmp_deconvolution_vs_markers}
+# Compare predicted cell type proportion with their marker gene detection. What do you observe?
+
+# e.g.:
+SpatialPlot(dec_vis, features = c("B_Cells", "MS4A1"))
+# Note: 'B_cells' is in the metadata and contains the normalized weights imported from the predictions, while
+# 'MS4A1' is found in the normalized expression of the Visium dataset
+
+SpatialPlot(dec_vis, features = c("Myoepi_KRT15pos", "KRT15"))
+
+```
+
+###### ISCHIA - Celltype Cooccurrence analysis
+
+With ISCHIA, a tool developed in our lab, we can cluster the Visium spots according to their cell type composition profile, rather than by their expression profile.
+
+(You can find the publication, 'Identifying Spatial Co-occurrence in Healthy and InflAmed tissues', at https://doi.org/10.1038/s44320-023-00006-5 ).
+
+Then we can test if in a given composition cluster (CC), pairs of cell types co-occur more or less than what can be expected randomly.
+
+```{r cell_type_cooccurrence, message=FALSE}
+# Cluster spots by their composition, i.e. by their profile of co-occurring celltypes (and their weight per spot), 
+# rather than directly by their expression profile.
+# Let's define 5 composition clusters
+set.seed(42)
+dec_vis <- ISCHIA::Composition.cluster(spatial.object	= dec_vis, 
+                                       # probability matrix of deconvoluted spatial spots:
+                                       Celltype_deconvolved_probs = predictions, 
+                                       # number of expected clusters:
+                                       k=5)
+
+# the results end up in a new metadata column automatically named 'CompositionCluster_CC', let's plot them:
+SpatialDimPlot(dec_vis, group.by = c("CompositionCluster_CC")) +  guides(fill = guide_legend(override.aes = list(size=4)))
+#+ scale_fill_brewer(palette="Set1")
+
+# Let's focus on the invasive tumor spots, which is identified as a separate composition cluster in red (CC1). To highlight it better:
+SpatialPlot(dec_vis, cells.highlight = colnames(dec_vis)[dec_vis$CompositionCluster_CC=="CC1"]) + 
+  ggtitle("spots assigned to Composition Cluster 1 (CC1)") + NoLegend()
+
+# Let's study the co-occurrences in the cluster that overlaps well with the invasive front
+
+cooc_CC1 <- ISCHIA::spatial.celltype.cooccurence(spatial.object= dec_vis,
+                                          deconv.prob.mat = predictions,
+                                          COI="CC1",
+                                          prob.th = 0.05,# Probability threshold to convert the 
+                                          # deconvolution probability matrix to a binary presence/absence matrix
+                                          Condition = unique(dec_vis$orig.ident))
+
+# Plot the celltype cooccurrence matrix to summarize the results:
+ISCHIA::plot.celltype.cooccurence(cooc_CC1) +  theme(text = element_text(size = 0.5)) + 
+      ggtitle("")
+```
+
+This was to answer: what cell types co-occur in composition cluster 1?
+
+But we might also not want to leverage the composition clusters, and rather just ask: what other cell types are likely to co-occur in spots with high representation of cell type A?
+
+```{r cooccurence_with_custom_spots_selection, message=FALSE}
+#####
+# e.g., Spots with high macrophages_1 prediction/composition:
+# first we extract the barcodes of spots that have above a certain fraction
+# of their composition predicted to be of Macrophages 1:
+high_macroph1_bc <- colnames(dec_vis)[dec_vis$Macrophages_1 >=0.3]
+SpatialPlot(dec_vis, cells.highlight = high_macroph1_bc)
+
+# we recreate an annotation column for the Visium metadata similar to the one ISCHIA produces for the composition clusters, 
+# and use AddMetaData to add it to the Seurat object:
+tmp <- dec_vis@meta.data %>% dplyr::mutate(my_CC = dplyr::case_match(rownames(.), 
+                                   high_macroph1_bc ~ "M1_high",
+                                   .default = "others")) %>% dplyr::select(orig.ident, my_CC)
+
+new_CC <- tmp$my_CC
+names(new_CC) <- rownames(tmp)
+
+# Note that we call the column 'CompositionCluster_CC' because 'ISCHIA::spatial.celltype.cooccurence' is coded to test only on
+# that column - alternatively we could have rewritten the function to customize this.
+tmp_vis <- AddMetaData(dec_vis, metadata = new_CC, col.name = "CompositionCluster_CC")
+cooc_m1 <- ISCHIA::spatial.celltype.cooccurence(spatial.object= tmp_vis,
+                                     deconv.prob.mat = predictions,
+                                     COI="M1_high",
+                                     prob.th = 0.05,
+                                     Condition= unique(tmp_vis$orig.ident))
+
+# Cooccurrence test graphic summary:
+ISCHIA::plot.celltype.cooccurence(cooc_m1) +  theme(text = element_text(size = 0.5)) + 
+      ggtitle("")
+
+
+# We can test the same also for the spots with high Invasive Tumor composition, similarly to what we did with CC1:
+high_invasive_tumor_bc <- colnames(dec_vis)[dec_vis$Invasive_Tumor >=0.2]
+SpatialPlot(dec_vis, cells.highlight = high_invasive_tumor_bc)
+tmp <- dec_vis@meta.data %>% dplyr::mutate(my_CC = dplyr::case_match(rownames(.), 
+                                    high_invasive_tumor_bc ~ "InvTum_high",
+                                    .default = "others")) %>% dplyr::select(orig.ident, my_CC)
+
+new_CC <- tmp$my_CC
+names(new_CC) <- rownames(tmp)
+tmp_vis <- AddMetaData(dec_vis, metadata = new_CC, col.name = "CompositionCluster_CC")
+cooc_invT <- spatial.celltype.cooccurence(spatial.object= tmp_vis,
+                                     deconv.prob.mat = predictions,
+                                     COI="InvTum_high",
+                                     prob.th = 0.05,
+                                     Condition= unique(tmp_vis$orig.ident))
+
+# Cooccurrence test graphic summary:
+plot.celltype.cooccurence(cooc_invT) +  theme(text = element_text(size = 0.5)) + 
+      ggtitle("") #+ theme(plot.title = element_text(size = 20))
+```
+
+##### Optional Task 1
+Among the annotated cell types, the authors characterize two different grades of ductal carcinoma in situ (DCIS).
+
+Try to characterize the cell type co-occurrences as seen above for the spots with either high:
+
+- 'DCIS_1'
+
+- 'DCIS_2'
+
+and compare them.
+
+
+```{r dcis_task}
+# DCIS1
+
+
+# DCIS2
+
+```
+
+
+##### Optional Task 2
+
+Choose a different cell type or composition cluster to focus on, that you think could be interesting querying for how it spatially co-localizes with other cell types.
+
+```{r cc_of_choice}
+```
+
+

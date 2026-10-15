@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Setup, R libraries and data download</title>
+  <style>
+    :root {
+      --bg: #f7f7f4;
+      --paper: #ffffff;
+      --text: #1f2933;
+      --muted: #5b6773;
+      --border: #d9ded8;
+      --accent: #274c77;
+      --accent-light: #eef4fa;
+      --code-bg: #f3f4f6;
+      --success-bg: #f0f7f1;
+      --warning-bg: #fff8e6;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 18px;
+      line-height: 1.65;
+    }
+
+    .page {
+      max-width: 920px;
+      margin: 48px auto;
+      padding: 0 24px;
+    }
+
+    article {
+      background: var(--paper);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 56px 64px;
+      box-shadow: 0 10px 28px rgba(31, 41, 51, 0.08);
+    }
+
+    header {
+      border-bottom: 2px solid var(--border);
+      margin-bottom: 36px;
+      padding-bottom: 24px;
+    }
+
+    h1, h2, h3 {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.25;
+      color: #17212b;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: 2.35rem;
+      letter-spacing: -0.03em;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 1.05rem;
+    }
+
+    h2 {
+      margin-top: 44px;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+      font-size: 1.55rem;
+    }
+
+    h3 {
+      margin-top: 30px;
+      font-size: 1.18rem;
+    }
+
+    p { margin: 0 0 1.1rem; }
+
+    a {
+      color: var(--accent);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+      overflow-wrap: anywhere;
+    }
+
+    ul, ol { padding-left: 1.4rem; }
+    li { margin: 0.35rem 0; }
+
+    code {
+      background: var(--code-bg);
+      border: 1px solid #e2e5e9;
+      border-radius: 5px;
+      padding: 0.12rem 0.35rem;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.93em;
+    }
+
+    pre {
+      background: #f6f8fa;
+      border: 1px solid #d8dee4;
+      border-radius: 10px;
+      padding: 18px 20px;
+      overflow-x: auto;
+      font-size: 0.92rem;
+      line-height: 1.5;
+      margin: 1rem 0 1.4rem;
+    }
+
+    pre code {
+      background: transparent;
+      border: 0;
+      padding: 0;
+      font-size: inherit;
+    }
+
+    .callout {
+      border-left: 5px solid var(--accent);
+      background: var(--accent-light);
+      padding: 18px 22px;
+      border-radius: 0 10px 10px 0;
+      margin: 24px 0;
+    }
+
+    .callout h3 {
+      margin: 0 0 8px;
+      font-size: 1.05rem;
+    }
+
+    .callout p:last-child { margin-bottom: 0; }
+
+    .note {
+      background: var(--success-bg);
+      border-left-color: #477a4b;
+    }
+
+    .warning {
+      background: var(--warning-bg);
+      border-left-color: #a06a00;
+    }
+
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin: 20px 0 28px;
+    }
+
+    .setting-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 18px;
+      background: #fcfcfb;
+    }
+
+    .setting-card h3 {
+      margin: 0 0 10px;
+      font-size: 1rem;
+      color: var(--accent);
+    }
+
+    .setting-card ul {
+      margin: 0;
+      padding-left: 1.1rem;
+      font-size: 0.97rem;
+    }
+
+    .credentials {
+      display: inline-grid;
+      grid-template-columns: auto auto;
+      gap: 6px 14px;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 18px;
+      margin-bottom: 1.2rem;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 0.98rem;
+    }
+
+    .download-list {
+      list-style: none;
+      padding: 0;
+      counter-reset: downloads;
+    }
+
+    .download-list li {
+      counter-increment: downloads;
+      display: grid;
+      grid-template-columns: 40px 1fr;
+      gap: 14px;
+      align-items: start;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      background: #fcfcfb;
+      margin: 12px 0;
+    }
+
+    .download-list li::before {
+      content: counter(downloads);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: white;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-weight: 700;
+      font-size: 0.9rem;
+    }
+
+    footer {
+      margin-top: 46px;
+      padding-top: 22px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    @media (max-width: 760px) {
+      .page { margin: 0; padding: 0; }
+      article { border-radius: 0; padding: 32px 22px; }
+      body { font-size: 16px; }
+      h1 { font-size: 1.85rem; }
+      .settings-grid { grid-template-columns: 1fr; }
+    }
+
+    @media print {
+      body { background: white; }
+      .page { margin: 0; max-width: none; padding: 0; }
+      article { box-shadow: none; border: none; padding: 0; }
+      a { color: black; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <article>
+      <header>
+        <h1>Setup, R libraries and data download</h1>
+        <p class="subtitle">Preparation instructions for the upcoming Wednesday tutorials</p>
+      </header>
+
+      <p>Hello everyone!</p>
+      <p>We’ll start with some data analyses in the upcoming Wednesday tutorials.</p>
+      <p>To be ready for that, please complete the preparation steps below.</p>
+
+      <h2>1) Download Docker Desktop for the tutorial environment</h2>
+      <p>You can install Docker Desktop from the following link on your laptop:<br>
+        <a href="https://www.docker.com/products/docker-desktop/">https://www.docker.com/products/docker-desktop/</a>
+      </p>
+
+      <p>After installation, start Docker on your laptop and use the recommended settings. You can either create a Docker account or skip the login step.</p>
+
+      <p>When Docker starts, search for the following image:</p>
+      <pre><code>erkinacar5/sboc26</code></pre>
+
+      <p>Press <strong>Pull</strong> to download the image. It is approximately 6–7 GB, so this may take a while.</p>
+
+      <p>After pulling is complete, press <strong>Run</strong> on the image and configure the following settings:</p>
+
+      <section class="settings-grid" aria-label="Docker run settings">
+        <div class="setting-card">
+          <h3>Ports</h3>
+          <ul>
+            <li>Host port: <code>8787</code></li>
+          </ul>
+        </div>
+        <div class="setting-card">
+          <h3>Volumes</h3>
+          <ul>
+            <li>Create a tutorial folder on your laptop</li>
+            <li>Host path: your tutorial folder</li>
+            <li>Container path: <code>/tutorial</code></li>
+          </ul>
+        </div>
+        <div class="setting-card">
+          <h3>Environment variables</h3>
+          <ul>
+            <li>Variable: <code>PASSWORD</code></li>
+            <li>Value: <code>tutorial</code></li>
+          </ul>
+        </div>
+      </section>
+
+      <p>Once these settings are configured, press <strong>Run</strong> to start the container.</p>
+
+      <aside class="callout note">
+        <h3>Why do we use a container?</h3>
+        <p>Due to the required libraries for this tutorial, it is difficult to ensure that everyone can install all necessary tools on their own computer.</p>
+        <p>We therefore use an isolated environment where everything is already installed and running. This also makes the tutorial more reproducible and avoids version conflicts.</p>
+      </aside>
+
+      <p>You should be able to see the running container by clicking <strong>Containers</strong> in the left panel of Docker Desktop. Click the small browser/window icon under the <strong>Port(s)</strong> column to open RStudio in your browser.</p>
+
+      <p>Use the following login credentials:</p>
+      <div class="credentials">
+        <strong>Username</strong><code>rstudio</code>
+        <strong>Password</strong><code>tutorial</code>
+      </div>
+
+      <h2>2) Download the input data</h2>
+      <p>We will need the following data for the tutorials. Please download the files and place them in the tutorial folder you created, so that they are available inside RStudio later.</p>
+
+      <ol class="download-list">
+        <li><a href="https://cf.10xgenomics.com/samples/cell-exp/7.0.1/Chromium_FFPE_Human_Breast_Cancer_Chromium_FFPE_Human_Breast_Cancer/Chromium_FFPE_Human_Breast_Cancer_Chromium_FFPE_Human_Breast_Cancer_count_sample_filtered_feature_bc_matrix.h5">Chromium FFPE Human Breast Cancer — filtered feature-barcode matrix</a></li>
+        <li><a href="https://cf.10xgenomics.com/samples/spatial-exp/2.0.0/CytAssist_FFPE_Human_Breast_Cancer/CytAssist_FFPE_Human_Breast_Cancer_filtered_feature_bc_matrix.h5">CytAssist FFPE Human Breast Cancer — filtered feature-barcode matrix</a></li>
+        <li><a href="https://cf.10xgenomics.com/samples/spatial-exp/2.0.0/CytAssist_FFPE_Human_Breast_Cancer/CytAssist_FFPE_Human_Breast_Cancer_spatial.tar.gz">CytAssist FFPE Human Breast Cancer — spatial data archive</a></li>
+      </ol>
+
+      <footer>
+        <p>That’s it! See you at the tutorial.</p>
+      </footer>
+    </article>
+  </main>
+</body>
+</html>
