@@ -46,3 +46,7 @@ All datasets are public 10x Genomics human breast cancer samples:
 The cell-type annotation used for deconvolution comes from the original study: Janesick et al., *Nature Communications* (2023), [doi:10.1038/s41467-023-43458-x](https://doi.org/10.1038/s41467-023-43458-x).
 
 Main packages: [Seurat](https://satijalab.org/seurat/), [SeuratDisk](https://github.com/mojaveazure/seurat-disk), [spacexr (RCTD)](https://github.com/dmcable/spacexr), [ISCHIA](https://github.com/ati-lz/ISCHIA), tidyverse and patchwork.
+
+## License
+
+The tutorials and the Dockerfile are licensed under [CC BY 4.0](LICENSE): you can reuse and adapt them with attribution. The 10x Genomics datasets and the Xenium Explorer screenshots are covered by their own terms.
